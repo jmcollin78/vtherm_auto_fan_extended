@@ -1,0 +1,9 @@
+[project]
+name = "vtherm_auto_fan_extended"
+version = "0.1.0"
+description = "Automatic fan speed control plugin for Versatile Thermostat"
+requires-python = ">=3.13"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"

@@ -1,0 +1,7 @@
+{
+    "name": "Versatile Thermostat Auto Fan",
+    "render_readme": true,
+    "homeassistant": "2025.1.0",
+    "zip_release": true,
+    "filename": "vtherm_auto_fan_extended.zip"
+}
