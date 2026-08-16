@@ -1,29 +1,64 @@
-"""Unit tests for the AutoFan feature manager business logic.
+"""Unit tests for the AutoFan feature manager wiring and evaluation.
 
-These tests exercise the pure mapping and activation logic without spinning up a
-full Home Assistant instance, using a lightweight fake runtime thermostat.
+These tests exercise the manager against a lightweight fake runtime thermostat
+and fake config entities, without spinning up a full Home Assistant instance.
 """
 
 from __future__ import annotations
 
 import pytest
 
-from custom_components.vtherm_auto_fan_extended.const import (
-    CONF_AUTO_FAN_HIGH,
-    CONF_AUTO_FAN_LOW,
-    CONF_AUTO_FAN_MEDIUM,
-    CONF_AUTO_FAN_NONE,
-    CONF_AUTO_FAN_TURBO,
-)
 from custom_components.vtherm_auto_fan_extended.manager import AutoFanFeatureManager
+from custom_components.vtherm_auto_fan_extended.registry import entity_bucket
+
+
+class FakeUnits:
+    """Minimal unit system stub."""
+
+    def __init__(self, temperature_unit: str = "°C") -> None:
+        """Store the temperature unit."""
+        self.temperature_unit = temperature_unit
+
+
+class FakeConfig:
+    """Minimal hass.config stub."""
+
+    def __init__(self, temperature_unit: str = "°C") -> None:
+        """Store the unit system."""
+        self.units = FakeUnits(temperature_unit)
 
 
 class FakeHass:
-    """Minimal hass stub used only for attribute storage."""
+    """Minimal hass stub used for data storage and config."""
 
-    def __init__(self) -> None:
-        """Initialize an empty data mapping."""
+    def __init__(self, temperature_unit: str = "°C") -> None:
+        """Initialize an empty data mapping and a config."""
         self.data: dict = {}
+        self.config = FakeConfig(temperature_unit)
+
+
+class FakeNumber:
+    """Fake threshold number entity."""
+
+    def __init__(self, native_value: float) -> None:
+        """Store the threshold value."""
+        self.native_value = native_value
+
+
+class FakeSelect:
+    """Fake rest-mode select entity."""
+
+    def __init__(self, current_option: str) -> None:
+        """Store the current option."""
+        self.current_option = current_option
+
+
+class FakeSwitch:
+    """Fake enable switch entity."""
+
+    def __init__(self, is_on: bool = True) -> None:
+        """Store the on/off state."""
+        self.is_on = is_on
 
 
 class FakeRuntime:
@@ -31,12 +66,14 @@ class FakeRuntime:
 
     def __init__(
         self,
+        hass: FakeHass,
         fan_modes: list[str],
         target: float | None = None,
         current: float | None = None,
         hvac_mode: str | None = "heat",
     ) -> None:
         """Store the runtime values exposed to the manager."""
+        self.hass = hass
         self.name = "fake"
         self.unique_id = "uid-1"
         self.entity_id = "climate.fake"
@@ -51,97 +88,150 @@ class FakeRuntime:
         """Record the fan mode sent to the underlying."""
         self.sent_fan_modes.append(fan_mode)
 
+    def update_custom_attributes(self) -> None:
+        """No-op stub."""
 
-def _make_manager(runtime: FakeRuntime) -> AutoFanFeatureManager:
-    """Create a manager bound to the given fake runtime."""
-    return AutoFanFeatureManager(runtime, FakeHass())
+    def async_write_ha_state(self) -> None:
+        """No-op stub."""
+
+
+def _setup(
+    fan_modes: list[str],
+    thresholds: dict[str, float],
+    rest_mode: str,
+    target: float | None = None,
+    current: float | None = None,
+    hvac_mode: str = "heat",
+    enabled: bool = True,
+) -> tuple[AutoFanFeatureManager, FakeRuntime]:
+    """Build a manager with a populated entity bucket."""
+    hass = FakeHass()
+    runtime = FakeRuntime(hass, fan_modes, target, current, hvac_mode)
+    manager = AutoFanFeatureManager(runtime, hass)
+    bucket = entity_bucket(hass, runtime.unique_id)
+    bucket["numbers"] = {fm: FakeNumber(val) for fm, val in thresholds.items()}
+    bucket["select"] = FakeSelect(rest_mode)
+    bucket["switch"] = FakeSwitch(enabled)
+    return manager, runtime
+
+
+ON_OFF_MODES = ["on_low", "on_high", "auto_low", "auto_high", "off"]
+ON_OFF_THRESHOLDS = {
+    "on_low": 1.0,
+    "on_high": 2.5,
+    "auto_low": 0.0,
+    "auto_high": 0.0,
+    "off": 0.0,
+}
 
 
 @pytest.mark.parametrize(
-    "fan_modes, level, expected",
+    "target, current, expected",
     [
-        (["low", "medium", "high"], CONF_AUTO_FAN_LOW, "low"),
-        (["low", "medium", "high"], CONF_AUTO_FAN_MEDIUM, "medium"),
-        (["low", "medium", "high"], CONF_AUTO_FAN_HIGH, "high"),
-        (["low", "medium", "high"], CONF_AUTO_FAN_TURBO, "high"),
-        (["low", "medium", "high", "turbo"], CONF_AUTO_FAN_TURBO, "turbo"),
-        (["low", "medium", "high", "turbo"], CONF_AUTO_FAN_LOW, "low"),
+        (20.5, 20.0, "off"),
+        (21.8, 20.0, "on_low"),
+        (23.0, 20.0, "on_high"),
     ],
 )
-def test_choose_auto_fan_mode_mapping(fan_modes, level, expected) -> None:
-    """The logical level should map onto the expected underlying speed."""
-    runtime = FakeRuntime(fan_modes)
-    manager = _make_manager(runtime)
-    manager.choose_auto_fan_mode(level)
-    assert manager._auto_activated_fan_mode == expected  # noqa: SLF001
-
-
-def test_choose_auto_fan_mode_none_disables() -> None:
-    """The ``none`` level disables activation."""
-    runtime = FakeRuntime(["low", "medium", "high"])
-    manager = _make_manager(runtime)
-    manager.choose_auto_fan_mode(CONF_AUTO_FAN_NONE)
-    assert manager._auto_activated_fan_mode is None  # noqa: SLF001
-
-
-def test_choose_auto_fan_mode_no_speed_modes_warns() -> None:
-    """Fan modes without speed values cannot be mapped."""
-    runtime = FakeRuntime(["auto", "mute"])
-    manager = _make_manager(runtime)
-    manager.choose_auto_fan_mode(CONF_AUTO_FAN_HIGH)
-    assert manager._auto_activated_fan_mode is None  # noqa: SLF001
-
-
-async def test_send_activates_when_gap_exceeds_threshold() -> None:
-    """A large positive gap in heating mode activates the fan."""
-    runtime = FakeRuntime(
-        ["low", "medium", "high"], target=22.0, current=19.0, hvac_mode="heat"
+async def test_evaluate_spec_example(target, current, expected) -> None:
+    """The concrete spec example is applied to the underlying."""
+    manager, runtime = _setup(
+        ON_OFF_MODES, ON_OFF_THRESHOLDS, "off", target=target, current=current
     )
-    manager = _make_manager(runtime)
-    manager._auto_fan_mode = CONF_AUTO_FAN_HIGH  # noqa: SLF001
-    manager.choose_auto_fan_mode(CONF_AUTO_FAN_HIGH)
-
-    sent = await manager._send_auto_fan_mode()  # noqa: SLF001
-    assert sent is True
-    assert runtime.sent_fan_modes == ["high"]
+    changed = await manager._evaluate()  # noqa: SLF001
+    assert changed is True
+    assert runtime.sent_fan_modes == [expected]
 
 
-async def test_send_deactivates_when_gap_small() -> None:
-    """A small gap deactivates the fan (silent mode)."""
-    runtime = FakeRuntime(
-        ["low", "medium", "high"], target=20.5, current=20.0, hvac_mode="heat"
+async def test_evaluate_not_resent_when_unchanged() -> None:
+    """The fan mode is only sent when it differs from the last sent one."""
+    manager, runtime = _setup(
+        ON_OFF_MODES, ON_OFF_THRESHOLDS, "off", target=23.0, current=20.0
     )
-    manager = _make_manager(runtime)
-    manager._auto_fan_mode = CONF_AUTO_FAN_HIGH  # noqa: SLF001
-    manager.choose_auto_fan_mode(CONF_AUTO_FAN_HIGH)
-
-    sent = await manager._send_auto_fan_mode()  # noqa: SLF001
-    assert sent is True
-    assert runtime.sent_fan_modes == ["low"]
+    assert await manager._evaluate() is True  # noqa: SLF001
+    assert await manager._evaluate() is False  # noqa: SLF001
+    assert runtime.sent_fan_modes == ["on_high"]
 
 
-async def test_send_off_mode_never_activates() -> None:
-    """When HVAC is off the fan is never activated."""
-    runtime = FakeRuntime(
-        ["low", "medium", "high"], target=25.0, current=19.0, hvac_mode="off"
+async def test_evaluate_disabled_switch_does_nothing() -> None:
+    """When the switch is off the manager never drives the underlying."""
+    manager, runtime = _setup(
+        ON_OFF_MODES,
+        ON_OFF_THRESHOLDS,
+        "off",
+        target=23.0,
+        current=20.0,
+        enabled=False,
     )
-    manager = _make_manager(runtime)
-    manager._auto_fan_mode = CONF_AUTO_FAN_HIGH  # noqa: SLF001
-    manager.choose_auto_fan_mode(CONF_AUTO_FAN_HIGH)
-
-    await manager._send_auto_fan_mode()  # noqa: SLF001
-    assert "high" not in runtime.sent_fan_modes
-
-
-async def test_send_none_level_does_nothing() -> None:
-    """With the ``none`` level nothing is sent."""
-    runtime = FakeRuntime(
-        ["low", "medium", "high"], target=25.0, current=19.0, hvac_mode="heat"
-    )
-    manager = _make_manager(runtime)
-    manager._auto_fan_mode = CONF_AUTO_FAN_NONE  # noqa: SLF001
-    manager.choose_auto_fan_mode(CONF_AUTO_FAN_NONE)
-
-    sent = await manager._send_auto_fan_mode()  # noqa: SLF001
-    assert sent is False
+    assert await manager._evaluate() is False  # noqa: SLF001
     assert runtime.sent_fan_modes == []
+
+
+async def test_evaluate_off_hvac_applies_rest() -> None:
+    """When HVAC is off the rest mode is applied."""
+    manager, runtime = _setup(
+        ON_OFF_MODES,
+        ON_OFF_THRESHOLDS,
+        "off",
+        target=25.0,
+        current=20.0,
+        hvac_mode="off",
+    )
+    assert await manager._evaluate() is True  # noqa: SLF001
+    assert runtime.sent_fan_modes == ["off"]
+
+
+async def test_evaluate_missing_temperature_returns_false() -> None:
+    """Missing temperatures prevent any action."""
+    manager, runtime = _setup(
+        ON_OFF_MODES, ON_OFF_THRESHOLDS, "off", target=None, current=20.0
+    )
+    assert await manager._evaluate() is False  # noqa: SLF001
+    assert runtime.sent_fan_modes == []
+
+
+async def test_evaluate_rest_mode_disappeared_falls_back() -> None:
+    """A rest mode that is not available anymore falls back to a valid mode."""
+    manager, runtime = _setup(
+        ON_OFF_MODES,
+        ON_OFF_THRESHOLDS,
+        "ghost",  # not part of the fan modes
+        target=20.2,
+        current=20.0,
+    )
+    # Gap 0.2 is below every threshold -> rest, but "ghost" is invalid so the
+    # manager falls back to the computed default rest mode ("off").
+    assert await manager._evaluate() is True  # noqa: SLF001
+    assert runtime.sent_fan_modes == ["off"]
+
+
+def test_is_configured_and_detected() -> None:
+    """The manager reports its configured/detected state from the entities."""
+    manager, _ = _setup(
+        ON_OFF_MODES, ON_OFF_THRESHOLDS, "off", target=23.0, current=20.0
+    )
+    assert manager.is_configured is True
+    assert manager.is_detected is False
+
+
+async def test_is_detected_true_when_driving() -> None:
+    """is_detected becomes True once a non-rest mode is driven."""
+    manager, _ = _setup(
+        ON_OFF_MODES, ON_OFF_THRESHOLDS, "off", target=23.0, current=20.0
+    )
+    await manager._evaluate()  # noqa: SLF001
+    assert manager.is_detected is True
+
+
+def test_add_custom_attributes_section() -> None:
+    """Custom attributes are exposed under the dedicated section."""
+    manager, _ = _setup(
+        ON_OFF_MODES, ON_OFF_THRESHOLDS, "off", target=23.0, current=20.0
+    )
+    attrs: dict = {}
+    manager.add_custom_attributes(attrs)
+    assert "auto_fan" in attrs
+    section = attrs["auto_fan"]
+    assert section["enabled"] is True
+    assert section["rest_mode"] == "off"
+    assert section["thresholds"] == ON_OFF_THRESHOLDS

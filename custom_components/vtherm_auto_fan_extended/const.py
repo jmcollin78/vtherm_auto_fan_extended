@@ -26,39 +26,8 @@ CONF_THERMOSTAT_CLIMATE = "thermostat_over_climate"
 # Config entry keys
 # ---------------------------------------------------------------------------
 
-#: Unique ID of the target VTherm (absent for the global defaults entry).
+#: Unique ID of the target VTherm.
 CONF_TARGET_VTHERM = "target_vtherm_unique_id"
-
-#: Selected auto fan level for a thermostat.
-CONF_AUTO_FAN_MODE = "auto_fan_mode"
-
-# ---------------------------------------------------------------------------
-# Auto fan levels
-# ---------------------------------------------------------------------------
-
-CONF_AUTO_FAN_NONE = "auto_fan_none"
-CONF_AUTO_FAN_LOW = "auto_fan_low"
-CONF_AUTO_FAN_MEDIUM = "auto_fan_medium"
-CONF_AUTO_FAN_HIGH = "auto_fan_high"
-CONF_AUTO_FAN_TURBO = "auto_fan_turbo"
-
-CONF_AUTO_FAN_MODES = [
-    CONF_AUTO_FAN_NONE,
-    CONF_AUTO_FAN_LOW,
-    CONF_AUTO_FAN_MEDIUM,
-    CONF_AUTO_FAN_HIGH,
-    CONF_AUTO_FAN_TURBO,
-]
-
-# ---------------------------------------------------------------------------
-# Business logic tuning
-# ---------------------------------------------------------------------------
-
-#: Temperature gap (°C) above which the auto fan is activated.
-AUTO_FAN_DTEMP_THRESHOLD = 2
-
-#: Fan modes considered as "deactivated" (weakest / silent modes).
-AUTO_FAN_DEACTIVATED_MODES = ["mute", "auto", "low", "quiet", "1"]
 
 # ---------------------------------------------------------------------------
 # VTherm HVAC mode values (mirrored from the core)
@@ -69,29 +38,64 @@ VTHERM_HVAC_MODE_HEAT = "heat"
 VTHERM_HVAC_MODE_COOL = "cool"
 
 # ---------------------------------------------------------------------------
-# Default option values
+# Threshold-based auto fan model
 # ---------------------------------------------------------------------------
 
-DEFAULT_AUTO_FAN_MODE = CONF_AUTO_FAN_HIGH
+#: A threshold of 0 means the fan_mode does not participate in the auto fan.
+THRESHOLD_DISABLED = 0.0
 
-DEFAULT_OPTIONS: dict = {
-    CONF_AUTO_FAN_MODE: DEFAULT_AUTO_FAN_MODE,
-}
+#: Number entity bounds (temperature gap).
+THRESHOLD_MIN = 0.0
+THRESHOLD_MAX = 10.0
+THRESHOLD_STEP = 0.1
 
-# ---------------------------------------------------------------------------
-# Services
-# ---------------------------------------------------------------------------
+#: Default threshold repartition bounds, by temperature unit.
+DEFAULT_THRESHOLD_START_CELSIUS = 1.0
+DEFAULT_THRESHOLD_END_CELSIUS = 3.0
+DEFAULT_THRESHOLD_START_FAHRENHEIT = 2.0
+DEFAULT_THRESHOLD_END_FAHRENHEIT = 6.0
 
-SERVICE_SET_AUTO_FAN_MODE = "set_auto_fan_mode"
+#: Fan modes that never participate as an activation speed. The ``auto``
+#: keyword is matched as a substring; every other value is matched exactly
+#: (case-insensitive).
+FAN_MODE_EXCLUSION = frozenset(
+    {
+        "off",
+        "none",
+        "sleep",
+        "night",
+        "focus",
+        "diffuse",
+        "dry_fan",
+        "circulate",
+        "fresh_air",
+        "on",
+        "schedule",
+        "programmed",
+    }
+)
 
-#: Human friendly service values mapped to internal levels.
-SERVICE_AUTO_FAN_LEVELS = {
-    "None": CONF_AUTO_FAN_NONE,
-    "Low": CONF_AUTO_FAN_LOW,
-    "Medium": CONF_AUTO_FAN_MEDIUM,
-    "High": CONF_AUTO_FAN_HIGH,
-    "Turbo": CONF_AUTO_FAN_TURBO,
-}
+#: Priority order used to pick a default rest fan_mode.
+REST_MODE_PRIORITY = ["sleep", "quiet", "silent", "auto", "min", "minimum", "off"]
+
+#: Most exhaustive list of known fan_modes, useful for detection and tests.
+EXTRA_FAN_MODES = [
+    # Standard HA
+    "off", "auto", "low", "medium", "high", "top", "focus", "diffuse",
+    # Silent / Night
+    "quiet", "silent", "sleep", "night", "min", "minimum",
+    # Boost
+    "turbo", "powerful", "strong", "jet", "max", "maximum", "boost",
+    # Comfort & varied
+    "breeze", "natural", "wind", "eco", "econo", "3d", "3d_auto",
+    # Air purifiers & HRV
+    "favorite", "custom", "circulate", "fresh_air", "auto_clean", "dry_fan",
+    # US / continuous thermostats
+    "on", "schedule", "programmed",
+    # Aliases & raw levels
+    "middle", "mid", "lowest", "highest",
+    "1", "2", "3", "4", "5", "6", "7",
+]
 
 # ---------------------------------------------------------------------------
 # Attributes
@@ -102,11 +106,37 @@ SERVICE_AUTO_FAN_LEVELS = {
 ATTR_AUTO_FAN_SECTION = "auto_fan"
 
 # ---------------------------------------------------------------------------
+# Entities
+# ---------------------------------------------------------------------------
+
+#: Platform sub-keys used inside the shared add_entities registry.
+PLATFORM_NUMBER = "number"
+PLATFORM_SELECT = "select"
+PLATFORM_SWITCH = "switch"
+
+#: Default state of the auto fan enable switch on first creation.
+DEFAULT_AUTO_FAN_ENABLED = True
+
+#: Entity unique_id / object_id building blocks.
+ENTITY_THRESHOLD_PREFIX = "fan_mode_threshold"
+ENTITY_REST_MODE_SUFFIX = "auto_fan_rest_mode"
+ENTITY_ENABLE_SUFFIX = "auto_fan_enable"
+
+# ---------------------------------------------------------------------------
 # Internal data keys (hass.data[DOMAIN])
 # ---------------------------------------------------------------------------
 
 DATA_FACTORY_REGISTERED = "factory_registered"
-DATA_SERVICES_REGISTERED = "services_registered"
 
 #: Registry of live AutoFanFeatureManager instances keyed by VTherm unique_id.
 DATA_MANAGERS = "managers"
+
+#: Registry of async_add_entities callbacks keyed by VTherm unique_id then by
+#: platform, so the manager can create its entities dynamically once the
+#: underlying fan_modes are known.
+DATA_ADD_ENTITIES = "add_entities"
+
+#: Registry of live entities keyed by VTherm unique_id. Each bucket holds the
+#: threshold ``number`` entities (by fan_mode), the rest-mode ``select`` and the
+#: enable ``switch`` so the manager can read their values.
+DATA_ENTITIES = "entities"
