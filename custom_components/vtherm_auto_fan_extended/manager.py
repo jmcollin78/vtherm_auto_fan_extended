@@ -69,8 +69,8 @@ class AutoFanFeatureManager:
         self._rest_select_created = False
         self._switch_created = False
         self._sensor_created = False
-        # Cached device info used to attach the entities to the VTherm device.
-        self._device_info: Any = None
+        # Cached VTherm device the entities link to (never owned by the plugin).
+        self._device_entry: Any = None
 
         # Exclusion patterns (raw + compiled), read from the config entry.
         self._exclusion_patterns_raw: list[str] = []
@@ -165,22 +165,18 @@ class AutoFanFeatureManager:
         return list(self._vtherm.underlying_fan_modes or [])
 
     @property
-    def device_info(self) -> Any:
-        """Return the device info the entities attach to.
+    def device_entry(self) -> Any:
+        """Return the VTherm ``DeviceEntry`` the auto fan entities link to.
 
-        Resolved once from the VTherm entity registry entry so the auto fan
-        entities are grouped under the same device as the thermostat.
+        The entities attach to the VTherm device via ``Entity.device_entry``
+        without copying its identity, so Home Assistant keeps a single
+        config-entry owner per device (Core 2026.8 device registry model).
         """
-        if self._device_info is not None:
-            return self._device_info
+        if self._device_entry is not None:
+            return self._device_entry
 
-        runtime_info = getattr(self._vtherm, "device_info", None)
-        if runtime_info:
-            self._device_info = runtime_info
-            return self._device_info
-
-        self._device_info = self._resolve_device_info()
-        return self._device_info
+        self._device_entry = self._resolve_device_entry()
+        return self._device_entry
 
     @property
     def is_fahrenheit(self) -> bool:
@@ -345,25 +341,24 @@ class AutoFanFeatureManager:
         if sensor is not None:
             sensor.update_fan_mode(fan_mode)
 
-    def _resolve_device_info(self) -> Any:
-        """Resolve the VTherm device info from the entity/device registries."""
+    def _resolve_device_entry(self) -> Any:
+        """Resolve the VTherm ``DeviceEntry`` from the entity/device registries.
+
+        Returns ``None`` until the VTherm device is registered; callers retry
+        on the next cycle so the link self-heals.
+        """
         from homeassistant.helpers import device_registry as dr
         from homeassistant.helpers import entity_registry as er
 
-        ent_reg = er.async_get(self._hass)
-        entry = ent_reg.async_get(self._vtherm.entity_id)
-        if entry is None or entry.device_id is None:
+        try:
+            ent_reg = er.async_get(self._hass)
+            entry = ent_reg.async_get(self._vtherm.entity_id)
+            if entry is None or entry.device_id is None:
+                return None
+            dev_reg = dr.async_get(self._hass)
+            return dev_reg.async_get(entry.device_id)
+        except (KeyError, AttributeError):
             return None
-        dev_reg = dr.async_get(self._hass)
-        device = dev_reg.async_get(entry.device_id)
-        if device is None:
-            return None
-        return {
-            "identifiers": device.identifiers,
-            "name": device.name,
-            "manufacturer": device.manufacturer,
-            "model": device.model,
-        }
 
     def ensure_entities(self) -> None:
         """Create the auto fan entities as soon as they can be created.

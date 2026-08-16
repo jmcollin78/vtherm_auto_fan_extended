@@ -38,7 +38,7 @@ class FakeHass:
 
 
 class FakeRuntime:
-    """Fake InterfaceThermostatRuntime exposing a device_info."""
+    """Fake InterfaceThermostatRuntime bound to the manager."""
 
     def __init__(self, hass: FakeHass, fan_modes: list[str]) -> None:
         """Store the runtime values exposed to the manager."""
@@ -47,7 +47,6 @@ class FakeRuntime:
         self.unique_id = "uid-1"
         self.entity_id = "climate.fake"
         self.underlying_fan_modes = fan_modes
-        self.device_info = {"identifiers": {("vtherm", "uid-1")}}
 
 
 class FakeAdder:
@@ -187,3 +186,30 @@ def test_reconcile_removes_number_for_disappeared_fan_mode() -> None:
     manager.ensure_entities()
 
     assert manager._created_number_fan_modes == {"low"}  # noqa: SLF001
+
+
+def test_entities_link_to_source_device_without_copying_identity() -> None:
+    """Entities attach to the VTherm DeviceEntry, never copy its device_info."""
+    hass = FakeHass()
+    runtime = FakeRuntime(hass, ["low", "high", "off"])
+    manager = AutoFanFeatureManager(runtime, hass)
+
+    sentinel = object()
+    manager._resolve_device_entry = lambda: sentinel  # noqa: SLF001
+
+    number_adder, select_adder, switch_adder, sensor_adder = _register(
+        hass, runtime.unique_id
+    )
+
+    manager.ensure_entities()
+
+    created = (
+        number_adder.entities
+        + select_adder.entities
+        + switch_adder.entities
+        + sensor_adder.entities
+    )
+    assert created
+    for entity in created:
+        assert entity.device_entry is sentinel
+        assert entity.device_info is None

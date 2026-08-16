@@ -81,7 +81,7 @@ class ThresholdNumber(RestoreNumber):
             f"{manager.vtherm_unique_id}_{ENTITY_THRESHOLD_PREFIX}_"
             f"{slugify(fan_mode)}"
         )
-        self._attr_device_info = manager.device_info
+        self.device_entry = manager.device_entry
 
     async def async_added_to_hass(self) -> None:
         """Restore the previous value and register with the manager."""
