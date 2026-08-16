@@ -33,9 +33,24 @@ means the `fan_mode` never participates), so non-normalized `fan_modes`
 
 ## Installation
 
+This plugin is **not yet published in the default HACS store**, so it must be
+added as a **custom repository**.
+
+### HACS (custom repository)
+
+1. Open *HACS* in Home Assistant.
+2. Click the top-right menu (⋮) and choose **Custom repositories**.
+3. Add the repository URL
+   `https://github.com/jmcollin78/vtherm_auto_fan_extended` and select the
+   **Integration** category, then click **Add**.
+4. Search for **Versatile Thermostat Auto Fan** in HACS, install it.
+5. Restart Home Assistant.
+
+### Manual
+
 Copy `custom_components/vtherm_auto_fan_extended` into your Home Assistant
-`config/custom_components/` folder (or install through HACS as a custom
-repository), then restart Home Assistant.
+`config/custom_components/` folder, then restart Home Assistant.
+
 
 ## Configuration
 
