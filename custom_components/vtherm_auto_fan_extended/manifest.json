@@ -1,16 +1,16 @@
 {
     "domain": "vtherm_auto_fan_extended",
     "name": "Versatile Thermostat Auto Fan",
-    "version": "0.1.0",
-    "config_flow": true,
     "after_dependencies": [
         "versatile_thermostat"
     ],
-    "integration_type": "service",
-    "iot_class": "calculated",
     "codeowners": [
         "@jmcollin78"
     ],
+    "config_flow": true,
     "documentation": "https://github.com/jmcollin78/vtherm_auto_fan_extended",
-    "issue_tracker": "https://github.com/jmcollin78/vtherm_auto_fan_extended/issues"
+    "integration_type": "service",
+    "issue_tracker": "https://github.com/jmcollin78/vtherm_auto_fan_extended/issues",
+    "iot_class": "calculated",
+    "version": "0.1.0"
 }
