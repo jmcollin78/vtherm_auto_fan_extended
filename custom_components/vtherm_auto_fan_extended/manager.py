@@ -10,11 +10,7 @@ from __future__ import annotations
 
 from typing import Any, TYPE_CHECKING
 
-from homeassistant.core import HomeAssistant, callback, Event
-from homeassistant.helpers.event import (
-    async_track_state_change_event,
-    EventStateChangedData,
-)
+from homeassistant.core import HomeAssistant
 
 from vtherm_api.log_collector import get_vtherm_logger, write_event_log
 
@@ -92,22 +88,15 @@ class AutoFanFeatureManager:
         )
 
     async def start_listening(self, force: bool = False) -> None:
-        """Compute the fan mapping and subscribe to VTherm state changes.
+        """Compute the fan mapping.
 
-        The core does not call ``refresh_state`` on external managers at every
-        cycle and over_climate thermostats have no cycle scheduler. Instead we
-        re-evaluate the auto fan whenever the VTherm publishes a new state,
-        which happens at each control cycle.
+        The auto fan is re-evaluated by the core at each control cycle through
+        ``refresh_state``. We therefore only compute the fan mapping here and
+        must not subscribe to VTherm state changes, otherwise the fan mode
+        would be recomputed twice (once per cycle and once per state change).
         """
         self.stop_listening()
         self.choose_auto_fan_mode(self._auto_fan_mode)
-        self._active_listener.append(
-            async_track_state_change_event(
-                self._hass,
-                [self._vtherm.entity_id],
-                self._async_vtherm_state_changed,
-            )
-        )
 
     def stop_listening(self) -> bool | None:
         """Remove all active listeners."""
@@ -202,15 +191,6 @@ class AutoFanFeatureManager:
     # ------------------------------------------------------------------
     # Internal logic
     # ------------------------------------------------------------------
-    @callback
-    def _async_vtherm_state_changed(self, event: Event[EventStateChangedData]) -> None:
-        """Re-evaluate the auto fan when the VTherm publishes a new state."""
-        del event
-        _LOGGER.debug(
-            "%s - VTherm state changed, re-evaluating auto fan mode", self
-        )
-        self._hass.async_create_task(self._send_auto_fan_mode())
-
     def _resolve_level(self, entry_infos: Any) -> str:
         """Resolve the effective auto fan level for this VTherm.
 
