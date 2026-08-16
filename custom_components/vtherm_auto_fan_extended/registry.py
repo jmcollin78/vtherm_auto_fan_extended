@@ -50,5 +50,5 @@ def entities_registry(hass: HomeAssistant) -> dict[str, dict[str, Any]]:
 def entity_bucket(hass: HomeAssistant, unique_id: str) -> dict[str, Any]:
     """Return the entity bucket for a VTherm unique_id, creating it if needed."""
     return entities_registry(hass).setdefault(
-        unique_id, {"numbers": {}, "select": None, "switch": None}
+        unique_id, {"numbers": {}, "select": None, "switch": None, "sensor": None}
     )

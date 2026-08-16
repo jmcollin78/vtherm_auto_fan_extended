@@ -27,7 +27,7 @@ from .factory import AutoFanManagerFactory
 
 VT_DOMAIN = "versatile_thermostat"
 
-PLATFORMS = [Platform.NUMBER, Platform.SELECT, Platform.SWITCH]
+PLATFORMS = [Platform.NUMBER, Platform.SELECT, Platform.SWITCH, Platform.SENSOR]
 
 _LOGGER = get_vtherm_logger(__name__)
 

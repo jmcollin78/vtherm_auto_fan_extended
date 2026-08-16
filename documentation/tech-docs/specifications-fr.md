@@ -41,12 +41,13 @@ Le principe retenu abandonne le mapping figé au profit d'un **seuil de déclenc
 
 Pour chaque `VTherm` éligible (scope `over_climate` exposant des `fan_modes`), le plugin crée les entités suivantes :
 
-1. **Un `number` de seuil par `fan_mode`.**
+1. **Un `number` de seuil par `fan_mode` participant.**
    - Nommage : `number.<vtherm>_fan_mode_threshold_<fan_mode>` (ou approchant, après slug des caractères spéciaux).
+   - **Créé uniquement pour les `fan_modes` participants** : les modes matchés par la liste d'expressions régulières d'exclusion (voir §Configuration) n'ont **pas** de `number`. Cela évite de créer des seuils absurdes pour des modes comme `off`, `auto`, `quiet`.
    - Représente l'écart de température (`|consigne régulée − température pièce|`) à partir duquel ce `fan_mode` devient candidat.
    - Caractéristiques : `RestoreNumber` (survit au redémarrage), `EntityCategory.CONFIG`, `min=0`, `step=0.1`, `max` raisonnable (ex. 10).
    - **Unité** : `°C` ou `°F` selon la configuration de l'utilisateur (`hass.config.units`).
-   - **Convention `seuil = 0`** (ou non défini) : ce `fan_mode` **ne participe pas** à l'auto-fan (il n'est jamais choisi comme niveau d'activation). Cela évite de créer des seuils absurdes pour des modes comme `off`, `auto`, `quiet`.
+   - **Convention `seuil = 0`** sur un `number` créé : l'utilisateur retire ce `fan_mode` des niveaux d'activation sans supprimer l'entité (il n'est jamais choisi comme niveau d'activation).
 
 2. **Un `select` « mode de repos ».**
    - Désigne le `fan_mode` à appliquer lorsque `|écart|` est **sous tous les seuils actifs** (écart faible : rien à brasser).
@@ -57,8 +58,14 @@ Pour chaque `VTherm` éligible (scope `over_climate` exposant des `fan_modes`), 
    - Active/désactive la fonction sans perdre la configuration des seuils.
    - Lorsqu'il est sur `off`, le manager n'agit plus sur le `fan_mode` du sous-jacent.
 
+4. **Un `sensor` « `fan_mode` courant ».**
+   - Expose le **`fan_mode` réellement envoyé** au sous-jacent par le manager (`sent_fan_mode`).
+   - **Sans `entity_category`** (ni CONFIG ni DIAGNOSTIC) et rattaché au device du VTherm : il apparaît ainsi dans la section « Capteurs » des entités du VTherm.
+   - `RestoreSensor` : conserve/restaure la dernière valeur envoyée. Lorsque l'auto-fan est désactivé (`switch` sur `off`), le sensor **conserve la dernière valeur envoyée** (il n'est pas remis à zéro).
+   - Activé par défaut.
+
 > **Deux concepts distincts, jamais encodés sur la même valeur :**
-> - « **ne participe pas** » → le `number` de seuil du mode vaut `0`.
+> - « **ne participe pas** » → soit aucun `number` n'est créé pour ce `fan_mode` (mode exclu par les patterns), soit son `number` existant est mis à `0` par l'utilisateur.
 > - « **valeur de repos** » → désignée par le `select` dédié.
 >
 > Le seuil `0` ne signifie donc qu'**une seule** chose (« pas un niveau d'activation »). Le repos est choisi ailleurs (le `select`). Il n'y a aucune collision possible entre les deux notions.
@@ -67,13 +74,9 @@ Pour chaque `VTherm` éligible (scope `over_climate` exposant des `fan_modes`), 
 
 À la **première création** des entités (avant toute restauration `RestoreNumber`), le plugin calcule des valeurs par défaut « best-effort » afin que l'auto-fan soit immédiatement fonctionnel, sans obliger l'utilisateur à sortir tous les seuils de `0`.
 
-**1. Classer chaque `fan_mode` en deux catégories.**
-   - **Non-participant** (seuil défaut = `0`) : le `fan_mode` correspond à un repos, un mode spécial ou non lié à un niveau de brassage. Détection par appartenance à la liste d'exclusion :
-     ```
-     off, none, auto (ou contient "auto"), sleep, night, focus, diffuse,
-     dry_fan, circulate, fresh_air, on, schedule, programmed
-     ```
-   - **Participant** (candidat vitesse) : tous les autres `fan_modes`, pris dans l'**ordre de la liste** `fan_modes` (par convention, généralement du plus faible au plus fort).
+**1. Classer chaque `fan_mode` en deux catégories** à l'aide de la **liste d'expressions régulières d'exclusion** (configurable, voir §Configuration).
+   - **Non-participant** : le `fan_mode` correspond à un repos / mode spécial. Il l'est dès qu'**au moins une** expression régulière de la liste d'exclusion le matche entièrement (`re.fullmatch`, insensible à la casse). **Aucun `number` de seuil n'est créé** pour ce mode.
+   - **Participant** (candidat vitesse) : tous les autres `fan_modes`, pris dans l'**ordre de la liste** `fan_modes` (par convention, généralement du plus faible au plus fort). Un `number` de seuil est créé pour chacun.
 
 **2. Répartir linéairement des seuils croissants** sur les `N` participants, entre une borne basse `START` et une borne haute `END` :
 
@@ -101,18 +104,18 @@ $$\text{seuil}_i = \text{START} + (\text{END} - \text{START}) \cdot \frac{i}{N-1
 
 #### Exemple d'initialisation (unité °C)
 
-`fan_modes = [on_low, on_high, auto_low, auto_high, off]` → 2 participants (`on_low`, `on_high`), les autres exclus (`auto_*` contient `auto`, `off` exclu) :
+`fan_modes = [on_low, on_high, auto_low, auto_high, off]` → 2 participants (`on_low`, `on_high`) ; `auto_low`/`auto_high` matchés par `.*auto.*`, `off` matché par `^off$` :
 
-| `fan_mode` | Catégorie | Seuil défaut |
+| `fan_mode` | Catégorie | `number` de seuil |
 |---|---|---|
-| `on_low` | participant (0/1) | **1.0** |
-| `on_high` | participant (1/1) | **3.0** |
-| `auto_low` | non-participant (contient `auto`) | 0 |
-| `auto_high` | non-participant (contient `auto`) | 0 |
-| `off` | non-participant | 0 |
-| `select` mode de repos | — | **`off`** |
+| `on_low` | participant (0/1) | créé, défaut **1.0** |
+| `on_high` | participant (1/1) | créé, défaut **3.0** |
+| `auto_low` | non-participant (`.*auto.*`) | non créé |
+| `auto_high` | non-participant (`.*auto.*`) | non créé |
+| `off` | non-participant (`off`) | non créé |
+| `select` mode de repos | — | défaut **`off`** |
 
-`fan_modes = [auto, quiet, low, medlow, medium, medhigh, high, turbo]` → `auto` exclu, 7 participants répartis de 1.0 à 3.0 :
+`fan_modes = [auto, quiet, low, medlow, medium, medhigh, high, turbo]` → `auto` exclu (aucun `number` créé), 7 participants répartis de 1.0 à 3.0 :
 
 | `fan_mode` | Seuil défaut |
 |---|---|
@@ -156,6 +159,52 @@ EXTRA_FAN_MODES = [
 ]
 ```
 
+### Configuration (ConfigFlow)
+
+La configuration se fait par entrée d'intégration, **une par VTherm cible** :
+
+1. **VTherm cible** (`target_vtherm_unique_id`) : l'entité `climate` du VTherm `over_climate` à piloter.
+2. **Liste d'expressions régulières d'exclusion** (`exclusion_patterns`) : motifs (regex) déterminant les `fan_modes` **non-participants** (pour lesquels aucun `number` de seuil n'est créé). Un `fan_mode` est exclu dès qu'**au moins un** motif le matche **entièrement** (`re.fullmatch`, insensible à la casse).
+
+**Valeur par défaut** de la liste d'exclusion :
+
+```python
+DEFAULT_EXCLUSION_PATTERNS = [
+    r".*auto.*",
+    "off", "none", "on",
+    "sleep", "night",
+    "focus", "diffuse",
+    "dry_fan", "circulate", "fresh_air",
+    "schedule", "programmed",
+]
+```
+
+- Le matching est un **`re.fullmatch`** : le motif doit couvrir la chaîne entière. Une chaîne fixe se saisit donc telle quelle (`off`, `quiet`, `night`) sans avoir à l'ancrer, et n'attrape que le `fan_mode` exact (`off` n'exclut pas `on_low`/`on_high`).
+- La règle historique « contient `auto` » est portée par le motif `.*auto.*` (matche `auto`, `auto_low`, `auto_high`, `3d_auto`, …).
+- L'utilisateur peut ajouter/retirer des motifs pour ajuster la détection à son matériel (chaîne fixe pour un mode précis, wildcards regex pour un motif partiel).
+
+**Édition ultérieure** : la liste est modifiable via le flux **reconfigure**. À la validation, l'entrée est rechargée et les entités sont réconciliées (voir Cas limites) :
+- un `fan_mode` devenu **exclu** → son `number` de seuil est **supprimé** (sa valeur est perdue, comportement assumé) ;
+- un `fan_mode` devenu **participant** → son `number` est créé avec la valeur par défaut.
+
+**Validation** : un motif regex invalide est rejeté par le ConfigFlow avec un message d'erreur ; l'entrée n'est pas enregistrée tant que tous les motifs ne sont pas compilables.
+
+**Réconciliation des `number` de seuil** (à chaque cycle et après reconfigure) :
+
+```mermaid
+flowchart TD
+    A[Cycle / reconfigure] --> B{fan_modes disponibles ?}
+    B -- non --> Z[Self-heal au prochain cycle]
+    B -- oui --> C[Pour chaque fan_mode]
+    C --> D{Exclu par un pattern regex ?}
+    D -- oui --> E{number existe ?}
+    E -- oui --> F[Supprimer le number]
+    E -- non --> G[Ne pas creer]
+    D -- non --> H{number existe ?}
+    H -- non --> I[Creer number valeur par defaut]
+    H -- oui --> J[Conserver]
+```
+
 ### Algorithme de sélection
 
 À chaque cycle, si l'auto-fan est activé (`switch` sur `on`) :
@@ -173,16 +222,15 @@ EXTRA_FAN_MODES = [
 
 Matériel dont `fan_modes = [on_low, on_high, auto_low, auto_high, off]`.
 
-Configuration utilisateur :
+Configuration utilisateur (seuls les participants ont un `number`) :
 
 | Entité | Valeur | Interprétation |
 |---|---|---|
 | `number` seuil `on_low` | 1.0 | s'active dès que l'écart atteint 1.0° |
 | `number` seuil `on_high` | 2.5 | s'active dès que l'écart atteint 2.5° |
-| `number` seuil `auto_low` | 0 | ne participe pas |
-| `number` seuil `auto_high` | 0 | ne participe pas |
-| `number` seuil `off` | 0 | ne participe pas |
 | `select` mode de repos | `off` | appliqué quand l'écart est faible |
+
+`auto_low`, `auto_high`, `off` sont exclus (patterns par défaut) : aucun `number` n'est créé pour eux. `off` reste disponible comme mode de repos via le `select`.
 
 Résultat de l'algorithme :
 
@@ -192,7 +240,7 @@ Résultat de l'algorithme :
 | 1.8 | `on_low` (1.0) | **`on_low`** |
 | 3.0 | `on_low` (1.0), `on_high` (2.5) | **`on_high`** (plus grand seuil ≤ écart) |
 
-Le mode de repos (`off`) a lui-même un seuil à 0, ce qui est cohérent : il ne participe pas comme niveau d'activation, il *est* le plancher.
+Le mode de repos (`off`) n'a pas de `number` de seuil (il est exclu), ce qui est cohérent : il ne participe pas comme niveau d'activation, il *est* le plancher.
 
 ### Observabilité
 
@@ -202,12 +250,14 @@ Des logs à différents niveaux facilitent le debug de la fonction. En particuli
 
 - **Aucun seuil défini (tous à 0)** : l'auto-fan applique en permanence le mode de repos.
 - **`underlying_fan_modes` vide au démarrage** : le sous-jacent n'a pas encore publié ses `fan_modes`. Le manager retente le calcul du mapping à chaque cycle via `refresh_state` (self-heal) jusqu'à ce que la liste soit disponible.
-- **`fan_mode` disparu après reconfiguration de l'équipement** : un seuil (ou le mode de repos) référence un `fan_mode` qui n'existe plus. Le manager ignore ce mode et retombe sur le repos / un mode valide, avec un log d'avertissement.
+- **`fan_mode` disparu après reconfiguration de l'équipement** : un seuil (ou le mode de repos) référence un `fan_mode` qui n'existe plus. Son `number` de seuil est supprimé ; le manager ignore ce mode et retombe sur le repos / un mode valide, avec un log d'avertissement.
+- **Modification de la liste d'exclusion** (via reconfigure) : l'entrée est rechargée et les `number` sont réconciliés — suppression des modes devenus exclus (**valeur perdue, comportement assumé**), création des modes devenus participants (valeur par défaut).
 - **`select` de repos non renseigné** : appliquer le défaut (`off`/`auto` si présents, sinon premier `fan_mode`).
 
 ### Notes d'implémentation
 
-- Le plugin ne possède actuellement aucune plateforme d'entités. Le Step 1 implique d'ajouter les plateformes `number`, `switch` et `select`, la création de ces entités par VTherm, et le **câblage manager ↔ entités** (le manager lit les seuils / le repos / l'état du switch ; les entités notifient le manager lors d'un changement de valeur).
+- Le Step 1 implique les plateformes `number`, `switch`, `select` et `sensor`, la création de ces entités par VTherm, et le **câblage manager ↔ entités** (le manager lit les seuils / le repos / l'état du switch ; les entités notifient le manager lors d'un changement de valeur ; le manager pousse la valeur du `sensor` à chaque envoi de `fan_mode`).
+- La liste d'exclusion (regex) est portée par l'entrée de configuration (défaut `DEFAULT_EXCLUSION_PATTERNS`) et éditable via reconfigure ; `ensure_entities` s'appuie dessus pour créer/supprimer les `number` de seuil.
 
 ## Step 2 — Anti-oscillation (selon retours utilisateurs)
 
@@ -220,7 +270,7 @@ Autour d'un seuil, deux cycles successifs peuvent faire osciller la vitesse (va-
 - **Forçage temporaire d'un `fan_mode`** via un **service** dédié. L'utilisateur force un `fan_mode` pour une durée **paramétrable** ; à l'expiration du délai, l'auto-fan reprend automatiquement la main.
 - **Profils chaud/froid séparés** : deux jeux de seuils distincts, car on ne brasse pas de la même manière en chauffage et en climatisation.
 - **Modulation horaire / mode « sleep »** : plafonner la vitesse la nuit (ou selon un preset), pour privilégier le silence nocturne.
-- **`sensor` de diagnostic** (optionnel) : exposer l'écart courant, le mode calculé et le mode réellement envoyé. Non prioritaire puisque ces informations sont déjà disponibles via les custom attributes.
+- **`sensor` de diagnostic complémentaire** (optionnel) : le `sensor` du `fan_mode` courant (mode réellement envoyé) est livré au Step 1. Des capteurs additionnels (écart courant, mode calculé) restent possibles mais non prioritaires, ces informations étant déjà dans les custom attributes.
 
 # Hors périmètre
 - **Auto-apprentissage** des seuils à partir de l'historique : non nécessaire pour l'instant.

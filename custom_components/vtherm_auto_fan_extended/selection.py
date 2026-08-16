@@ -8,12 +8,13 @@ can be unit tested in isolation.
 
 from __future__ import annotations
 
+import re
+
 from .const import (
     DEFAULT_THRESHOLD_END_CELSIUS,
     DEFAULT_THRESHOLD_END_FAHRENHEIT,
     DEFAULT_THRESHOLD_START_CELSIUS,
     DEFAULT_THRESHOLD_START_FAHRENHEIT,
-    FAN_MODE_EXCLUSION,
     REST_MODE_PRIORITY,
     THRESHOLD_DISABLED,
     VTHERM_HVAC_MODE_COOL,
@@ -22,26 +23,47 @@ from .const import (
 )
 
 
-def is_participant(fan_mode: str) -> bool:
+def compile_exclusion_patterns(patterns: list[str]) -> list[re.Pattern[str]]:
+    """Compile the exclusion patterns, ignoring case."""
+    return [re.compile(pattern, re.IGNORECASE) for pattern in patterns]
+
+
+def is_participant(
+    fan_mode: str, exclusion_patterns: list[re.Pattern[str]]
+) -> bool:
     """Return True when the fan_mode is a candidate activation speed.
 
-    A fan_mode is excluded when it contains the ``auto`` keyword or when it
-    matches one of the special/rest modes exactly (case-insensitive).
+    A fan_mode is excluded when at least one exclusion pattern matches it
+    entirely (``re.fullmatch``).
     """
-    normalized = fan_mode.strip().lower()
-    if "auto" in normalized:
-        return False
-    return normalized not in FAN_MODE_EXCLUSION
+    candidate = fan_mode.strip()
+    return not any(
+        pattern.fullmatch(candidate) for pattern in exclusion_patterns
+    )
+
+
+def filter_participants(
+    fan_modes: list[str], exclusion_patterns: list[re.Pattern[str]]
+) -> list[str]:
+    """Return the fan_modes that participate as activation speeds, in order."""
+    return [
+        fan_mode
+        for fan_mode in fan_modes
+        if is_participant(fan_mode, exclusion_patterns)
+    ]
 
 
 def compute_default_thresholds(
-    fan_modes: list[str], is_fahrenheit: bool = False
+    fan_modes: list[str],
+    exclusion_patterns: list[re.Pattern[str]],
+    is_fahrenheit: bool = False,
 ) -> dict[str, float]:
-    """Compute best-effort default thresholds for the given fan modes.
+    """Compute best-effort default thresholds for the participant fan modes.
 
-    Participant fan modes (in list order) receive linearly increasing
-    thresholds between ``START`` and ``END`` (depending on the unit); every
-    non-participant receives ``0`` (does not participate).
+    Only participant fan modes (those not matched by any exclusion pattern)
+    receive a threshold; they are spread linearly, in list order, between
+    ``START`` and ``END`` (depending on the unit). Non-participant fan modes are
+    absent from the returned mapping (no threshold number is created for them).
     """
     if is_fahrenheit:
         start = DEFAULT_THRESHOLD_START_FAHRENHEIT
@@ -50,13 +72,10 @@ def compute_default_thresholds(
         start = DEFAULT_THRESHOLD_START_CELSIUS
         end = DEFAULT_THRESHOLD_END_CELSIUS
 
-    participants = [mode for mode in fan_modes if is_participant(mode)]
+    participants = filter_participants(fan_modes, exclusion_patterns)
     count = len(participants)
 
-    thresholds: dict[str, float] = {
-        mode: THRESHOLD_DISABLED for mode in fan_modes
-    }
-
+    thresholds: dict[str, float] = {}
     for index, mode in enumerate(participants):
         if count == 1:
             value = start

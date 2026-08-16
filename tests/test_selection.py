@@ -5,16 +5,20 @@ from __future__ import annotations
 import pytest
 
 from custom_components.vtherm_auto_fan_extended.const import (
+    DEFAULT_EXCLUSION_PATTERNS,
     VTHERM_HVAC_MODE_COOL,
     VTHERM_HVAC_MODE_HEAT,
     VTHERM_HVAC_MODE_OFF,
 )
 from custom_components.vtherm_auto_fan_extended.selection import (
+    compile_exclusion_patterns,
     compute_default_rest_mode,
     compute_default_thresholds,
     is_participant,
     select_fan_mode,
 )
+
+PATTERNS = compile_exclusion_patterns(DEFAULT_EXCLUSION_PATTERNS)
 
 
 # ---------------------------------------------------------------------------
@@ -41,7 +45,7 @@ from custom_components.vtherm_auto_fan_extended.selection import (
 )
 def test_is_participant(fan_mode, expected) -> None:
     """Fan modes are classified as participants or not."""
-    assert is_participant(fan_mode) is expected
+    assert is_participant(fan_mode, PATTERNS) is expected
 
 
 # ---------------------------------------------------------------------------
@@ -50,13 +54,10 @@ def test_is_participant(fan_mode, expected) -> None:
 def test_default_thresholds_on_off_example() -> None:
     """The on_low/on_high example from the spec (2 participants, °C)."""
     fan_modes = ["on_low", "on_high", "auto_low", "auto_high", "off"]
-    thresholds = compute_default_thresholds(fan_modes, is_fahrenheit=False)
+    thresholds = compute_default_thresholds(fan_modes, PATTERNS, is_fahrenheit=False)
     assert thresholds == {
         "on_low": 1.0,
         "on_high": 3.0,
-        "auto_low": 0.0,
-        "auto_high": 0.0,
-        "off": 0.0,
     }
 
 
@@ -72,8 +73,8 @@ def test_default_thresholds_seven_participants_example() -> None:
         "high",
         "turbo",
     ]
-    thresholds = compute_default_thresholds(fan_modes, is_fahrenheit=False)
-    assert thresholds["auto"] == 0.0
+    thresholds = compute_default_thresholds(fan_modes, PATTERNS, is_fahrenheit=False)
+    assert "auto" not in thresholds
     assert thresholds["quiet"] == 1.0
     assert thresholds["low"] == 1.3
     assert thresholds["medlow"] == 1.7
@@ -85,19 +86,21 @@ def test_default_thresholds_seven_participants_example() -> None:
 
 def test_default_thresholds_single_participant() -> None:
     """A single participant gets the START bound."""
-    thresholds = compute_default_thresholds(["off", "low", "auto"])
-    assert thresholds == {"off": 0.0, "low": 1.0, "auto": 0.0}
+    thresholds = compute_default_thresholds(["off", "low", "auto"], PATTERNS)
+    assert thresholds == {"low": 1.0}
 
 
 def test_default_thresholds_fahrenheit_bounds() -> None:
     """Fahrenheit bounds are used when requested."""
-    thresholds = compute_default_thresholds(["low", "high"], is_fahrenheit=True)
+    thresholds = compute_default_thresholds(
+        ["low", "high"], PATTERNS, is_fahrenheit=True
+    )
     assert thresholds == {"low": 2.0, "high": 6.0}
 
 
 def test_default_thresholds_empty() -> None:
     """An empty fan_modes list yields an empty mapping."""
-    assert compute_default_thresholds([]) == {}
+    assert compute_default_thresholds([], PATTERNS) == {}
 
 
 # ---------------------------------------------------------------------------

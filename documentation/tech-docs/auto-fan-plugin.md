@@ -24,7 +24,7 @@ L'objectif secondaire est de **définir un mécanisme générique de "Feature Ma
 | Phase 1 — Contrat/API | `vtherm_api` | ✅ **Fait** (v `0.4.0`) | `InterfaceFeatureManagerFactory` (`name`, `supports(thermostat)`, `create(thermostat)`), registre (`register/unregister/get/list_feature_managers`, `get_feature_manager_factories`), `InterfaceThermostatRuntime` étendu (temp régulée/cible/courante, `vtherm_hvac_mode`, `underlying_fan_modes`, `async_set_underlying_fan_mode`, …). |
 | Phase 2 — Cœur | `versatile_thermostat` | 🟡 **Partiel** | Chargement des managers externes en place (`_load_external_feature_managers`, `_external_manager_names`, retry au startup). **Reste** : refresh par cycle des managers externes + service de compat `set_auto_fan_mode`. Voir §0.4. |
 | Phase 3 — Plugin (parité legacy) | `vtherm_auto_fan_extended` | ✅ **Fait & validé (tests réels)** | Logique métier legacy portée. Refresh par cycle branché sur `refresh_state` (cœur), hook autonome retiré, self-heal du mapping ajouté, logs debug ajoutés. Tests exécutés en local (12 passed). Voir §0.5. |
-| Phase 4 — Plugin (nouvelle fonction par seuils) | `vtherm_auto_fan_extended` | � **Step 1 fait & validé (48 tests)** | Pivot vers l'approche **seuil par `fan_mode`** (entités `number`/`select`/`switch`) livré. Le mapping figé et le service legacy sont retirés. Steps 2/3 restants. Spec : [`specifications-fr.md`](./specifications-fr.md). Voir §0.6. |
+| Phase 4 — Plugin (nouvelle fonction par seuils) | `vtherm_auto_fan_extended` | � **Step 1 fait & validé (49 tests)** | Pivot vers l'approche **seuil par `fan_mode`** (entités `number`/`select`/`switch`/`sensor`) livré. `sensor` `fan_mode` courant, exclusion regex éditable (pas de `number` pour les exclus), reconfigure. Le mapping figé et le service legacy sont retirés. Steps 2/3 restants. Spec : [`specifications-fr.md`](./specifications-fr.md). Voir §0.6. |
 
 ### 0.2 Décisions figées
 
@@ -63,14 +63,15 @@ L'objectif secondaire est de **définir un mécanisme générique de "Feature Ma
 
 ### 0.6 Reste-à-faire — PLUGIN (nouvelle fonction par seuils, Phase 4)
 
-Référence : [`specifications-fr.md`](./specifications-fr.md). Le mapping figé legacy est remplacé par une configuration par seuils. **Step 1 — fait & validé (48 tests)** :
+Référence : [`specifications-fr.md`](./specifications-fr.md). Le mapping figé legacy est remplacé par une configuration par seuils. **Step 1 — fait & validé (49 tests)** :
 
-- ✅ Plateformes d'entités **`number`** (un seuil par `fan_mode`), **`select`** (mode de repos), **`switch`** (activation auto-fan), créées dynamiquement par le manager pour chaque `over_climate` éligible (`number.py`, `select.py`, `switch.py`, `ensure_entities()`).
-- ✅ Câblage **manager ↔ entités** via `hass.data` (`DATA_ADD_ENTITIES` callbacks + `DATA_ENTITIES` buckets, `registry.py`) : le manager lit seuils / repos / état du switch ; les entités le notifient via `on_config_changed()`.
+- ✅ Plateformes d'entités **`number`** (un seuil par `fan_mode` participant), **`select`** (mode de repos), **`switch`** (activation auto-fan), **`sensor`** (`fan_mode` courant envoyé), créées dynamiquement par le manager pour chaque `over_climate` éligible (`number.py`, `select.py`, `switch.py`, `sensor.py`, `ensure_entities()`).
+- ✅ Câblage **manager ↔ entités** via `hass.data` (`DATA_ADD_ENTITIES` callbacks + `DATA_ENTITIES` buckets, `registry.py`) : le manager lit seuils / repos / état du switch, pousse le `fan_mode` courant vers le `sensor` ; les entités le notifient via `on_config_changed()`.
 - ✅ **Algorithme de sélection** (`selection.py`) : plus grand seuil `> 0` et `≤ |écart|`, sinon repos ; garde-fou cohérence chaud/froid/off ; envoi seulement si changement. Défauts de seuils/repos calculés à la création (idempotent).
-- ✅ `number` : `RestoreNumber`, `EntityCategory.CONFIG`, `min=0`, `step=0.1`, `max=10`, unité `°C`/`°F` selon `hass.config.units`. Convention **seuil `0` = « ne participe pas »**. `select`/`switch` : `RestoreEntity`.
+- ✅ **Exclusion des `fan_modes`** : liste de motifs regex éditable (`DEFAULT_EXCLUSION_PATTERNS`, `re.fullmatch` insensible à la casse). Les `fan_modes` exclus **ne reçoivent pas** d'entité `number` (réconciliation à chaque `ensure_entities()` : création des manquants, suppression des obsolètes). L'utilisateur peut mettre à `0` un seuil créé pour le neutraliser.
+- ✅ `number` : `RestoreNumber`, `EntityCategory.CONFIG`, `min=0`, `step=0.1`, `max=10`, unité `°C`/`°F` selon `hass.config.units`. Convention **seuil `0` = « ne participe pas »**. `select`/`switch` : `RestoreEntity`. `sensor` : `RestoreSensor`, sans `entity_category` (visible dans les « Capteurs »), conserve sa dernière valeur quand l'auto-fan est désactivé.
 - ✅ `write_event_log` conservé sur chaque changement de `fan_mode` (avec l'écart).
-- ✅ Config flow simplifié (choix du VTherm cible uniquement) ; constantes/service/traductions legacy (`none/low/medium/high/turbo`) retirés.
+- ✅ Config flow (choix du VTherm cible + liste de motifs d'exclusion éditable) ; étape `reconfigure` pour éditer les motifs ; validation regex (`invalid_regex`). Constantes/service/traductions legacy (`none/low/medium/high/turbo`) retirés.
 - ✅ Tests unitaires (`test_selection.py`, `test_auto_fan_mode.py`, `test_entities.py`).
 - Steps 2 et 3 (anti-oscillation ; forçage temporaire par service, profils chaud/froid, mode « sleep ») : voir la spec, hors périmètre immédiat.
 

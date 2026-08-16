@@ -29,6 +29,9 @@ CONF_THERMOSTAT_CLIMATE = "thermostat_over_climate"
 #: Unique ID of the target VTherm.
 CONF_TARGET_VTHERM = "target_vtherm_unique_id"
 
+#: Regular-expression patterns excluding fan_modes from threshold creation.
+CONF_EXCLUSION_PATTERNS = "exclusion_patterns"
+
 # ---------------------------------------------------------------------------
 # VTherm HVAC mode values (mirrored from the core)
 # ---------------------------------------------------------------------------
@@ -55,25 +58,20 @@ DEFAULT_THRESHOLD_END_CELSIUS = 3.0
 DEFAULT_THRESHOLD_START_FAHRENHEIT = 2.0
 DEFAULT_THRESHOLD_END_FAHRENHEIT = 6.0
 
-#: Fan modes that never participate as an activation speed. The ``auto``
-#: keyword is matched as a substring; every other value is matched exactly
-#: (case-insensitive).
-FAN_MODE_EXCLUSION = frozenset(
-    {
-        "off",
-        "none",
-        "sleep",
-        "night",
-        "focus",
-        "diffuse",
-        "dry_fan",
-        "circulate",
-        "fresh_air",
-        "on",
-        "schedule",
-        "programmed",
-    }
-)
+#: Fan modes that never participate as an activation speed are detected with
+#: regular-expression patterns matched with ``re.fullmatch`` (case-insensitive).
+#: A fixed string matches only that exact fan_mode; use wildcards for a partial
+#: match (e.g. ``.*auto.*`` catches ``auto``, ``auto_low``, ``3d_auto``). This
+#: list is the default value of the ``exclusion_patterns`` config option and can
+#: be edited by the user.
+DEFAULT_EXCLUSION_PATTERNS = [
+    r".*auto.*",
+    "off", "none", "on",
+    "sleep", "night",
+    "focus", "diffuse",
+    "dry_fan", "circulate", "fresh_air",
+    "schedule", "programmed",
+]
 
 #: Priority order used to pick a default rest fan_mode.
 REST_MODE_PRIORITY = ["sleep", "quiet", "silent", "auto", "min", "minimum", "off"]
@@ -113,6 +111,7 @@ ATTR_AUTO_FAN_SECTION = "auto_fan"
 PLATFORM_NUMBER = "number"
 PLATFORM_SELECT = "select"
 PLATFORM_SWITCH = "switch"
+PLATFORM_SENSOR = "sensor"
 
 #: Default state of the auto fan enable switch on first creation.
 DEFAULT_AUTO_FAN_ENABLED = True
@@ -121,6 +120,7 @@ DEFAULT_AUTO_FAN_ENABLED = True
 ENTITY_THRESHOLD_PREFIX = "fan_mode_threshold"
 ENTITY_REST_MODE_SUFFIX = "auto_fan_rest_mode"
 ENTITY_ENABLE_SUFFIX = "auto_fan_enable"
+ENTITY_CURRENT_FAN_MODE_SUFFIX = "auto_fan_current_fan_mode"
 
 # ---------------------------------------------------------------------------
 # Internal data keys (hass.data[DOMAIN])

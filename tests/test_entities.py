@@ -5,6 +5,7 @@ from __future__ import annotations
 from custom_components.vtherm_auto_fan_extended.const import (
     PLATFORM_NUMBER,
     PLATFORM_SELECT,
+    PLATFORM_SENSOR,
     PLATFORM_SWITCH,
 )
 from custom_components.vtherm_auto_fan_extended.manager import AutoFanFeatureManager
@@ -61,38 +62,42 @@ class FakeAdder:
         self.entities.extend(entities)
 
 
-def _register(hass: FakeHass, uid: str) -> tuple[FakeAdder, FakeAdder, FakeAdder]:
-    """Register fake add-entities callbacks for the three platforms."""
+def _register(
+    hass: FakeHass, uid: str
+) -> tuple[FakeAdder, FakeAdder, FakeAdder, FakeAdder]:
+    """Register fake add-entities callbacks for the four platforms."""
     registry = add_entities_registry(hass).setdefault(uid, {})
     number_adder = FakeAdder()
     select_adder = FakeAdder()
     switch_adder = FakeAdder()
+    sensor_adder = FakeAdder()
     registry[PLATFORM_NUMBER] = number_adder
     registry[PLATFORM_SELECT] = select_adder
     registry[PLATFORM_SWITCH] = switch_adder
-    return number_adder, select_adder, switch_adder
+    registry[PLATFORM_SENSOR] = sensor_adder
+    return number_adder, select_adder, switch_adder, sensor_adder
 
 
 def test_ensure_entities_creates_all() -> None:
-    """The manager creates one switch, one select and one number per fan_mode."""
+    """Only participant fan_modes get a threshold number; excluded ones do not."""
     hass = FakeHass()
     fan_modes = ["on_low", "on_high", "auto_low", "auto_high", "off"]
     runtime = FakeRuntime(hass, fan_modes)
     manager = AutoFanFeatureManager(runtime, hass)
-    number_adder, select_adder, switch_adder = _register(hass, runtime.unique_id)
+    number_adder, select_adder, switch_adder, sensor_adder = _register(
+        hass, runtime.unique_id
+    )
 
     manager.ensure_entities()
 
     assert len(switch_adder.entities) == 1
     assert len(select_adder.entities) == 1
-    assert len(number_adder.entities) == 5
+    assert len(sensor_adder.entities) == 1
+    # auto_low, auto_high and off are excluded by the default patterns.
+    assert len(number_adder.entities) == 2
 
     values = {e._fan_mode: e.native_value for e in number_adder.entities}  # noqa: SLF001
-    assert values["on_low"] == 1.0
-    assert values["on_high"] == 3.0
-    assert values["auto_low"] == 0.0
-    assert values["auto_high"] == 0.0
-    assert values["off"] == 0.0
+    assert values == {"on_low": 1.0, "on_high": 3.0}
 
 
 def test_ensure_entities_is_idempotent() -> None:
@@ -100,14 +105,15 @@ def test_ensure_entities_is_idempotent() -> None:
     hass = FakeHass()
     runtime = FakeRuntime(hass, ["low", "high", "off"])
     manager = AutoFanFeatureManager(runtime, hass)
-    number_adder, select_adder, switch_adder = _register(hass, runtime.unique_id)
+    number_adder, select_adder, switch_adder, _ = _register(hass, runtime.unique_id)
 
     manager.ensure_entities()
     manager.ensure_entities()
 
     assert len(switch_adder.entities) == 1
     assert len(select_adder.entities) == 1
-    assert len(number_adder.entities) == 3
+    # off is excluded -> only low and high.
+    assert len(number_adder.entities) == 2
 
 
 def test_ensure_entities_creates_number_for_new_fan_mode() -> None:
@@ -115,7 +121,7 @@ def test_ensure_entities_creates_number_for_new_fan_mode() -> None:
     hass = FakeHass()
     runtime = FakeRuntime(hass, ["low", "high"])
     manager = AutoFanFeatureManager(runtime, hass)
-    number_adder, _, _ = _register(hass, runtime.unique_id)
+    number_adder, _, _, _ = _register(hass, runtime.unique_id)
 
     manager.ensure_entities()
     assert len(number_adder.entities) == 2
@@ -133,20 +139,25 @@ def test_ensure_entities_waits_for_fan_modes() -> None:
     hass = FakeHass()
     runtime = FakeRuntime(hass, [])
     manager = AutoFanFeatureManager(runtime, hass)
-    number_adder, select_adder, switch_adder = _register(hass, runtime.unique_id)
+    number_adder, select_adder, switch_adder, sensor_adder = _register(
+        hass, runtime.unique_id
+    )
 
     manager.ensure_entities()
-    # The switch does not depend on the fan modes.
+    # The switch and sensor do not depend on the fan modes.
     assert len(switch_adder.entities) == 1
+    assert len(sensor_adder.entities) == 1
     assert len(number_adder.entities) == 0
     assert len(select_adder.entities) == 0
 
     runtime.underlying_fan_modes = ["low", "high", "off"]
     manager.ensure_entities()
-    assert len(number_adder.entities) == 3
+    # off is excluded -> only low and high.
+    assert len(number_adder.entities) == 2
     assert len(select_adder.entities) == 1
-    # The switch is not recreated.
+    # The switch and sensor are not recreated.
     assert len(switch_adder.entities) == 1
+    assert len(sensor_adder.entities) == 1
 
 
 def test_select_options_follow_fan_modes() -> None:
@@ -154,9 +165,25 @@ def test_select_options_follow_fan_modes() -> None:
     hass = FakeHass()
     runtime = FakeRuntime(hass, ["low", "high", "off"])
     manager = AutoFanFeatureManager(runtime, hass)
-    _, select_adder, _ = _register(hass, runtime.unique_id)
+    _, select_adder, _, _ = _register(hass, runtime.unique_id)
 
     manager.ensure_entities()
     select = select_adder.entities[0]
     assert select.options == ["low", "high", "off"]
     assert select.current_option == "off"
+
+
+def test_reconcile_removes_number_for_disappeared_fan_mode() -> None:
+    """A fan_mode that disappears from the underlying loses its number."""
+    hass = FakeHass()
+    runtime = FakeRuntime(hass, ["low", "high"])
+    manager = AutoFanFeatureManager(runtime, hass)
+    _register(hass, runtime.unique_id)
+
+    manager.ensure_entities()
+    assert manager._created_number_fan_modes == {"low", "high"}  # noqa: SLF001
+
+    runtime.underlying_fan_modes = ["low"]
+    manager.ensure_entities()
+
+    assert manager._created_number_fan_modes == {"low"}  # noqa: SLF001

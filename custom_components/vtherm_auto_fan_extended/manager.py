@@ -11,6 +11,7 @@ underlying climate.
 
 from __future__ import annotations
 
+import re
 from typing import Any, TYPE_CHECKING
 
 from homeassistant.const import UnitOfTemperature
@@ -20,15 +21,22 @@ from vtherm_api.log_collector import get_vtherm_logger, write_event_log
 
 from .const import (
     ATTR_AUTO_FAN_SECTION,
+    CONF_EXCLUSION_PATTERNS,
+    CONF_TARGET_VTHERM,
+    DEFAULT_EXCLUSION_PATTERNS,
+    DOMAIN,
     FEATURE_MANAGER_AUTO_FAN,
     PLATFORM_NUMBER,
     PLATFORM_SELECT,
+    PLATFORM_SENSOR,
     PLATFORM_SWITCH,
 )
 from .registry import add_entities_registry, entity_bucket, managers
 from .selection import (
+    compile_exclusion_patterns,
     compute_default_rest_mode,
     compute_default_thresholds,
+    filter_participants,
     select_fan_mode,
 )
 
@@ -60,8 +68,13 @@ class AutoFanFeatureManager:
         self._created_number_fan_modes: set[str] = set()
         self._rest_select_created = False
         self._switch_created = False
+        self._sensor_created = False
         # Cached device info used to attach the entities to the VTherm device.
         self._device_info: Any = None
+
+        # Exclusion patterns (raw + compiled), read from the config entry.
+        self._exclusion_patterns_raw: list[str] = []
+        self._exclusion_patterns: list[re.Pattern[str]] = []
 
         self._active_listener: list = []
 
@@ -205,6 +218,34 @@ class AutoFanFeatureManager:
         """Return the HA temperature unit."""
         return self._hass.config.units.temperature_unit
 
+    def _read_exclusion_patterns_raw(self) -> list[str]:
+        """Read the raw exclusion patterns from the plugin config entry.
+
+        Falls back to the defaults when the config entry cannot be reached (for
+        example during early startup or in unit tests).
+        """
+        config_entries = getattr(self._hass, "config_entries", None)
+        if config_entries is not None:
+            try:
+                entries = config_entries.async_entries(DOMAIN)
+            except Exception:  # pylint: disable=broad-except
+                entries = []
+            for entry in entries:
+                if entry.data.get(CONF_TARGET_VTHERM) == self._vtherm.unique_id:
+                    return list(
+                        entry.data.get(
+                            CONF_EXCLUSION_PATTERNS, DEFAULT_EXCLUSION_PATTERNS
+                        )
+                    )
+        return list(DEFAULT_EXCLUSION_PATTERNS)
+
+    def _refresh_exclusion_patterns(self) -> None:
+        """Recompile the exclusion patterns when the raw list changed."""
+        raw = self._read_exclusion_patterns_raw()
+        if raw != self._exclusion_patterns_raw:
+            self._exclusion_patterns_raw = raw
+            self._exclusion_patterns = compile_exclusion_patterns(raw)
+
     def _bucket(self) -> dict[str, Any]:
         """Return the live entity bucket for this VTherm."""
         return entity_bucket(self._hass, self._vtherm.unique_id)
@@ -293,9 +334,16 @@ class AutoFanFeatureManager:
             )
             await self._vtherm.async_set_underlying_fan_mode(selected)
             self._last_sent_fan_mode = selected
+            self._update_sensor(selected)
             return True
 
         return False
+
+    def _update_sensor(self, fan_mode: str) -> None:
+        """Push the sent fan_mode to the current-fan-mode sensor, if present."""
+        sensor = self._bucket().get("sensor")
+        if sensor is not None:
+            sensor.update_fan_mode(fan_mode)
 
     def _resolve_device_info(self) -> Any:
         """Resolve the VTherm device info from the entity/device registries."""
@@ -320,12 +368,16 @@ class AutoFanFeatureManager:
     def ensure_entities(self) -> None:
         """Create the auto fan entities as soon as they can be created.
 
-        The switch does not depend on the fan modes and is created as soon as
-        its platform callback is available. The threshold numbers and the rest
-        select are created once the underlying fan_modes are available. This is
-        called at each cycle so the entities self-heal when the underlying
-        publishes (or changes) its fan_modes later.
+        The switch and the current-fan-mode sensor do not depend on the fan
+        modes and are created as soon as their platform callbacks are
+        available. The threshold numbers and the rest select are created once
+        the underlying fan_modes are available. This is called at each cycle so
+        the entities self-heal when the underlying publishes (or changes) its
+        fan_modes later, and the threshold numbers are reconciled against the
+        exclusion patterns.
         """
+        self._refresh_exclusion_patterns()
+
         registry = add_entities_registry(self._hass).get(self._vtherm.unique_id)
         if not registry:
             return
@@ -334,13 +386,17 @@ class AutoFanFeatureManager:
         if switch_cb is not None and not self._switch_created:
             self._create_switch(switch_cb)
 
+        sensor_cb = registry.get(PLATFORM_SENSOR)
+        if sensor_cb is not None and not self._sensor_created:
+            self._create_sensor(sensor_cb)
+
         fan_modes = self._vtherm.underlying_fan_modes or []
         if not fan_modes:
             return
 
         number_cb = registry.get(PLATFORM_NUMBER)
         if number_cb is not None:
-            self._create_threshold_numbers(fan_modes, number_cb)
+            self._reconcile_threshold_numbers(fan_modes, number_cb)
 
         select_cb = registry.get(PLATFORM_SELECT)
         if select_cb is not None and not self._rest_select_created:
@@ -353,13 +409,35 @@ class AutoFanFeatureManager:
         add_entities([AutoFanEnableSwitch(self)])
         self._switch_created = True
 
-    def _create_threshold_numbers(self, fan_modes: list[str], add_entities) -> None:
-        """Create the missing threshold ``number`` entities."""
+    def _create_sensor(self, add_entities) -> None:
+        """Create the current-fan-mode ``sensor`` entity."""
+        from .sensor import AutoFanCurrentFanModeSensor  # local import (cycle)
+
+        add_entities([AutoFanCurrentFanModeSensor(self)])
+        self._sensor_created = True
+
+    def _reconcile_threshold_numbers(self, fan_modes: list[str], add_entities) -> None:
+        """Create numbers for participants and remove obsolete ones.
+
+        A threshold ``number`` exists only for participant fan_modes (those not
+        matched by an exclusion pattern) that are currently exposed by the
+        underlying. Numbers whose fan_mode became excluded or disappeared are
+        removed.
+        """
         from .number import ThresholdNumber  # local import to avoid a cycle
 
-        defaults = compute_default_thresholds(fan_modes, self.is_fahrenheit)
+        participants = filter_participants(fan_modes, self._exclusion_patterns)
+        participant_set = set(participants)
+
+        obsolete = self._created_number_fan_modes - participant_set
+        for fan_mode in obsolete:
+            self._remove_number(fan_mode)
+
+        defaults = compute_default_thresholds(
+            fan_modes, self._exclusion_patterns, self.is_fahrenheit
+        )
         new_entities = []
-        for fan_mode in fan_modes:
+        for fan_mode in participants:
             if fan_mode in self._created_number_fan_modes:
                 continue
             new_entities.append(
@@ -374,6 +452,26 @@ class AutoFanFeatureManager:
 
         if new_entities:
             add_entities(new_entities)
+
+    def _remove_number(self, fan_mode: str) -> None:
+        """Remove the threshold ``number`` entity of a fan_mode."""
+        self._created_number_fan_modes.discard(fan_mode)
+        entity = self._bucket()["numbers"].get(fan_mode)
+        if entity is None:
+            return
+        create_task = getattr(self._hass, "async_create_task", None)
+        if create_task is not None:
+            create_task(self._async_remove_entity(entity))
+
+    async def _async_remove_entity(self, entity) -> None:
+        """Remove an entity from HA and from the entity registry."""
+        from homeassistant.helpers import entity_registry as er
+
+        entity_id = entity.entity_id
+        await entity.async_remove(force_remove=True)
+        ent_reg = er.async_get(self._hass)
+        if entity_id and ent_reg.async_get(entity_id) is not None:
+            ent_reg.async_remove(entity_id)
 
     def _create_rest_select(self, fan_modes: list[str], add_entities) -> None:
         """Create the rest-mode ``select`` entity."""
