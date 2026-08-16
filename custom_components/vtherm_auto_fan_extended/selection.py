@@ -17,7 +17,6 @@ from .const import (
     DEFAULT_THRESHOLD_START_FAHRENHEIT,
     REST_MODE_PRIORITY,
     THRESHOLD_DISABLED,
-    VTHERM_HVAC_MODE_COOL,
     VTHERM_HVAC_MODE_HEAT,
     VTHERM_HVAC_MODE_OFF,
 )
@@ -118,9 +117,9 @@ def select_fan_mode(
     - Falls back to the rest mode when no active threshold qualifies.
     """
     if (
-        (hvac_mode == VTHERM_HVAC_MODE_HEAT and dtemp < 0)
-        or (hvac_mode == VTHERM_HVAC_MODE_COOL and dtemp > 0)
-        or hvac_mode == VTHERM_HVAC_MODE_OFF
+        hvac_mode == VTHERM_HVAC_MODE_OFF
+        or (hvac_mode == VTHERM_HVAC_MODE_HEAT and dtemp < 0)
+        or (hvac_mode != VTHERM_HVAC_MODE_HEAT and dtemp > 0)
     ):
         return rest_mode
 

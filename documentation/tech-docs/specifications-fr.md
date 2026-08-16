@@ -212,7 +212,7 @@ flowchart TD
 1. Calculer l'écart `dtemp = consigne régulée − température pièce`, puis `|dtemp|`.
 2. **Cohérence chaud/froid** (garde-fou réintroduit explicitement) : l'auto-fan ne pousse pas le ventilateur à contre-sens.
    - `hvac_mode == HEAT` et `dtemp < 0` (pièce déjà plus chaude que la consigne) → **repos**.
-   - `hvac_mode == COOL` et `dtemp > 0` (pièce déjà plus froide que la consigne) → **repos**.
+   - `hvac_mode` différent de `HEAT` (par exemple `COOL`, `DRY`, `FAN_ONLY` ou autre) et `dtemp > 0` (pièce déjà froide ou non-chauffée mais on est sous la consigne) → **repos**.
    - `hvac_mode == OFF` → **repos**.
 3. Sélection du `fan_mode` : parmi les modes dont le **seuil est strictement positif**, retenir celui dont le seuil est le **plus grand parmi ceux `≤ |dtemp|`**.
 4. Si **aucun** seuil actif n'est `≤ |dtemp|` (écart trop faible), appliquer le **mode de repos** (`select`).

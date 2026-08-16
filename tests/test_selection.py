@@ -192,6 +192,24 @@ def test_select_fan_mode_cool_negative_gap_activates(on_off_thresholds) -> None:
     assert result == "on_high"
 
 
+@pytest.mark.parametrize("hvac_mode", ["fan_only", "dry"])
+def test_select_fan_mode_non_heat_positive_gap_returns_rest(
+    on_off_thresholds, hvac_mode
+) -> None:
+    """Non-heating modes with a positive gap (room colder) return the rest mode."""
+    result = select_fan_mode(3.0, on_off_thresholds, "off", hvac_mode)
+    assert result == "off"
+
+
+@pytest.mark.parametrize("hvac_mode", ["fan_only", "dry"])
+def test_select_fan_mode_non_heat_negative_gap_activates(
+    on_off_thresholds, hvac_mode
+) -> None:
+    """Non-heating modes with a negative gap (room warmer) activate the fan."""
+    result = select_fan_mode(-3.0, on_off_thresholds, "off", hvac_mode)
+    assert result == "on_high"
+
+
 def test_select_fan_mode_off_returns_rest(on_off_thresholds) -> None:
     """When HVAC is off the rest mode is always returned."""
     result = select_fan_mode(
