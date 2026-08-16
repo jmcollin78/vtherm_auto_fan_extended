@@ -16,7 +16,7 @@ from homeassistant.helpers.event import (
     EventStateChangedData,
 )
 
-from vtherm_api.log_collector import get_vtherm_logger
+from vtherm_api.log_collector import get_vtherm_logger, write_event_log
 
 from .const import (
     ATTR_AUTO_FAN_SECTION,
@@ -84,7 +84,12 @@ class AutoFanFeatureManager:
         self._current_auto_fan_mode = level
         # Register this manager so services can reach it.
         self._registry()[self._vtherm.unique_id] = self
-        _LOGGER.debug("%s - Auto fan manager initialized with level %s", self, level)
+        _LOGGER.info(
+            "%s - Auto fan plugin registered for VTherm %s with level %s",
+            self,
+            self._vtherm.unique_id,
+            level,
+        )
 
     async def start_listening(self, force: bool = False) -> None:
         """Compute the fan mapping and subscribe to VTherm state changes.
@@ -112,6 +117,7 @@ class AutoFanFeatureManager:
 
     async def refresh_state(self) -> bool:
         """Re-evaluate and apply the auto fan mode. Returns True on change."""
+        _LOGGER.debug("%s - refresh_state called", self)
         return await self._send_auto_fan_mode()
 
     def restore_state(self, old_state: Any) -> None:
@@ -124,6 +130,11 @@ class AutoFanFeatureManager:
             if restored:
                 self._auto_fan_mode = restored
                 self._current_auto_fan_mode = restored
+                _LOGGER.info(
+                    "%s - Restored auto fan level %s from previous state",
+                    self,
+                    restored,
+                )
 
     def add_listener(self, func) -> None:
         """Add a callback to be removed on stop."""
@@ -195,6 +206,9 @@ class AutoFanFeatureManager:
     def _async_vtherm_state_changed(self, event: Event[EventStateChangedData]) -> None:
         """Re-evaluate the auto fan when the VTherm publishes a new state."""
         del event
+        _LOGGER.debug(
+            "%s - VTherm state changed, re-evaluating auto fan mode", self
+        )
         self._hass.async_create_task(self._send_auto_fan_mode())
 
     def _resolve_level(self, entry_infos: Any) -> str:
@@ -272,11 +286,12 @@ class AutoFanFeatureManager:
 
         if should_activate:
             if self._last_sent_fan_mode != self._auto_activated_fan_mode:
-                _LOGGER.info(
-                    "%s - Activate the auto fan mode with %s because delta temp is %.2f",
-                    self,
-                    self._auto_activated_fan_mode,
-                    dtemp,
+                write_event_log(
+                    _LOGGER,
+                    self._vtherm,
+                    f"Auto fan activated: setting underlying fan mode to "
+                    f"'{self._auto_activated_fan_mode}' because delta temp is "
+                    f"{dtemp:.2f}",
                 )
                 await self._vtherm.async_set_underlying_fan_mode(
                     self._auto_activated_fan_mode
@@ -289,11 +304,12 @@ class AutoFanFeatureManager:
             self._auto_deactivated_fan_mode is not None
             and self._last_sent_fan_mode not in AUTO_FAN_DEACTIVATED_MODES
         ):
-            _LOGGER.info(
-                "%s - Deactivate the auto fan mode with %s because delta temp is %.2f",
-                self,
-                self._auto_deactivated_fan_mode,
-                dtemp,
+            write_event_log(
+                _LOGGER,
+                self._vtherm,
+                f"Auto fan deactivated: setting underlying fan mode to "
+                f"'{self._auto_deactivated_fan_mode}' because delta temp is "
+                f"{dtemp:.2f}",
             )
             await self._vtherm.async_set_underlying_fan_mode(
                 self._auto_deactivated_fan_mode
