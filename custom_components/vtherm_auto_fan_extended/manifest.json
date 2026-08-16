@@ -10,7 +10,7 @@
     "config_flow": true,
     "documentation": "https://github.com/jmcollin78/vtherm_auto_fan_extended",
     "integration_type": "service",
-    "issue_tracker": "https://github.com/jmcollin78/vtherm_auto_fan_extended/issues",
     "iot_class": "calculated",
+    "issue_tracker": "https://github.com/jmcollin78/vtherm_auto_fan_extended/issues",
     "version": "0.1.0"
 }
