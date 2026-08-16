@@ -107,6 +107,11 @@ class AutoFanFeatureManager:
     async def refresh_state(self) -> bool:
         """Re-evaluate and apply the auto fan mode. Returns True on change."""
         _LOGGER.debug("%s - refresh_state called", self)
+        # The fan mapping may not have been computable at start_listening time
+        # (the underlying climate had not published its fan_modes yet). Retry
+        # the mapping here until it succeeds so the auto fan can self-heal.
+        if self._auto_fan_mode != CONF_AUTO_FAN_NONE and self._auto_activated_fan_mode is None:
+            self.choose_auto_fan_mode(self._auto_fan_mode)
         return await self._send_auto_fan_mode()
 
     def restore_state(self, old_state: Any) -> None:
@@ -307,8 +312,22 @@ class AutoFanFeatureManager:
         self._current_auto_fan_mode = auto_fan_mode
 
         fan_modes = self._vtherm.underlying_fan_modes or []
+        _LOGGER.debug(
+            "%s - choose_auto_fan_mode called with auto_fan_mode=%s, "
+            "underlying_fan_modes=%s",
+            self,
+            auto_fan_mode,
+            fan_modes,
+        )
 
         if auto_fan_mode == CONF_AUTO_FAN_NONE or not fan_modes:
+            _LOGGER.debug(
+                "%s - choose_auto_fan_mode short-circuit: auto_fan_mode=%s, "
+                "fan_modes_empty=%s -> no activated/deactivated fan mode",
+                self,
+                auto_fan_mode,
+                not fan_modes,
+            )
             self._auto_activated_fan_mode = None
             self._auto_deactivated_fan_mode = None
             return
@@ -344,12 +363,28 @@ class AutoFanFeatureManager:
         speed_modes = [mode for mode in fan_modes if mode not in ["auto"]]
 
         num_speeds = len(speed_modes)
+        _LOGGER.debug(
+            "%s - choose_auto_fan_mode speed_modes=%s (num_speeds=%d)",
+            self,
+            speed_modes,
+            num_speeds,
+        )
         if num_speeds == 0:
+            _LOGGER.debug(
+                "%s - choose_auto_fan_mode no speed modes after removing "
+                "special modes -> activated fan mode set to None",
+                self,
+            )
             self._auto_activated_fan_mode = None
             return
 
         # Assume speed_modes are ordered from low to high speed.
         speed_modes = fix_order_speed_modes(speed_modes)
+        _LOGGER.debug(
+            "%s - choose_auto_fan_mode speed_modes after ordering=%s",
+            self,
+            speed_modes,
+        )
 
         target_index = -1
 
@@ -372,9 +407,23 @@ class AutoFanFeatureManager:
         elif auto_fan_mode == CONF_AUTO_FAN_TURBO:
             target_index = num_speeds - 1
 
+        _LOGGER.debug(
+            "%s - choose_auto_fan_mode target_index=%d for level=%s",
+            self,
+            target_index,
+            auto_fan_mode,
+        )
+
         if 0 <= target_index < num_speeds:
             self._auto_activated_fan_mode = speed_modes[target_index]
         else:
+            _LOGGER.debug(
+                "%s - choose_auto_fan_mode target_index=%d out of range "
+                "[0, %d) -> activated fan mode set to None",
+                self,
+                target_index,
+                num_speeds,
+            )
             self._auto_activated_fan_mode = None
 
         self._auto_deactivated_fan_mode = None
