@@ -65,7 +65,7 @@ class RestModeSelect(RestoreEntity, SelectEntity):
         self._attr_unique_id = (
             f"{manager.vtherm_unique_id}_{ENTITY_REST_MODE_SUFFIX}"
         )
-        self._attr_device_info = manager.device_info
+        self.device_entry = manager.device_entry
 
     @property
     def options(self) -> list[str]:

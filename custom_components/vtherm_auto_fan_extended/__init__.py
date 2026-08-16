@@ -9,6 +9,9 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import CoreState, HomeAssistant
 from homeassistant.helpers import config_validation as cv
+from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers import helper_integration
 
 from vtherm_api.log_collector import get_vtherm_logger
 from vtherm_api.vtherm_api import VThermAPI
@@ -97,10 +100,74 @@ async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
     return True
 
 
+async def _cleanup_legacy_helper_devices(
+    hass: HomeAssistant, entry: ConfigEntry
+) -> None:
+    """Detach any historical device this helper wrongly co-owned or forked.
+
+    Older releases attached this plugin's config entry to the VTherm device by
+    copying its identifiers into ``device_info``. Core 2026.8 restricts a device
+    to a single config entry, so relink the plugin entities to the VTherm source
+    device and drop the residual split/fork(s) owned by this entry.
+    """
+
+    target_uid = entry.data.get(CONF_TARGET_VTHERM)
+    if target_uid is None:
+        return
+
+    ent_reg = er.async_get(hass)
+    source_device_id: str | None = None
+    source_entity_id = ent_reg.async_get_entity_id(
+        Platform.CLIMATE, VT_DOMAIN, target_uid
+    )
+    if source_entity_id is not None:
+        source_reg_entry = ent_reg.async_get(source_entity_id)
+        if source_reg_entry is not None:
+            source_device_id = source_reg_entry.device_id
+
+    remove_helper_devices = getattr(
+        helper_integration, "async_remove_helper_devices", None
+    )
+    if remove_helper_devices is not None:
+        if source_device_id is not None:
+            remove_helper_devices(
+                hass,
+                helper_config_entry_id=entry.entry_id,
+                source_device_id=source_device_id,
+            )
+        remove_helper_devices(
+            hass,
+            helper_config_entry_id=entry.entry_id,
+            source_device_id=None,
+            remove_all_devices=True,
+            keep_device_ids=(
+                {source_device_id} if source_device_id is not None else set()
+            ),
+        )
+        return
+
+    # Core 2025.8 to 2026.7: only the per-source helper API is available.
+    dev_reg = dr.async_get(hass)
+    legacy_device_ids = {
+        device.id
+        for device in dr.async_entries_for_config_entry(dev_reg, entry.entry_id)
+    }
+    if source_device_id is not None:
+        legacy_device_ids.add(source_device_id)
+    for device_id in legacy_device_ids:
+        helper_integration.async_remove_helper_config_entry_from_source_device(
+            hass,
+            helper_config_entry_id=entry.entry_id,
+            source_device_id=device_id,
+        )
+
+
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up vtherm_auto_fan_extended from a config entry."""
     _ensure_domain_data(hass)[entry.entry_id] = entry.entry_id
     _register_factory(hass)
+
+    await _cleanup_legacy_helper_devices(hass, entry)
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
