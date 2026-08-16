@@ -8,6 +8,7 @@ from typing import Any
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import CoreState, HomeAssistant
+from homeassistant.helpers import config_validation as cv
 
 from vtherm_api.log_collector import get_vtherm_logger
 from vtherm_api.vtherm_api import VThermAPI
@@ -28,6 +29,8 @@ from .factory import AutoFanManagerFactory
 VT_DOMAIN = "versatile_thermostat"
 
 PLATFORMS = [Platform.NUMBER, Platform.SELECT, Platform.SWITCH, Platform.SENSOR]
+
+CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 
 _LOGGER = get_vtherm_logger(__name__)
 
